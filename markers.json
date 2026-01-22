@@ -1,0 +1,42 @@
+[
+  {
+    "id": "norlands-ny",
+    "name": "Norlands",
+    "location": "North Yorkshire, England",
+    "overview": "A Country-side camping and caravanning club certified site with excellent visitor satisfaction.",
+    "region": "England",
+    "amenities": ["Local Bus Routes Available","Supermarket (within 3 miles)","Wi-Fi Available (Strong)","Good Dog Walking Area"],
+    "latitude": 54.2115,
+    "longitude": -1.5548
+  },
+  {
+    "id": "bryncws-ab",
+    "name": "Bryncws Farm Campsite",
+    "location": "Aberystwyth, Wales",
+    "overview": "Quiet and spacious campsite on an eco-friendly farm near Aberystwyth.",
+    "region": "Wales",
+    "amenities": ["Local Bus Routes Available","Village walkable","Good Dog Walking Area"],
+    "latitude": 52.4150,
+    "longitude": -4.0858
+  },
+  {
+    "id": "fenfarm-me",
+    "name": "Fen Farm Caravan Park",
+    "location": "Mersea Island, Essex, England",
+    "overview": "Spacious camping retreat with play area and bird sites.",
+    "region": "England",
+    "amenities": ["Supermarket (within 3 miles)","Wi-Fi Available (Medium)","Good Dog Walking Area"],
+    "latitude": 51.7958,
+    "longitude": 0.9333
+  },
+  {
+    "id": "lochness-ln",
+    "name": "Loch Ness Parkup",
+    "location": "Loch Ness, Scotland",
+    "overview": "Great views and convenient parkup for exploring the Highlands.",
+    "region": "Scotland",
+    "amenities": ["Good Dog Walking Area","Local waterway"],
+    "latitude": 57.3229,
+    "longitude": -4.4244
+  }
+]

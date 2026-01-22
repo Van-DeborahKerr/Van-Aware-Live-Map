@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Campsites UK — Live Van‑Aware Dashboard</title>
+
+  <!-- Tailwind (CDN) + Chart.js + Leaflet -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    body { font-family: 'Inter', system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background: #f1f5f9; color: #0f172a; }
+    #map { height: 520px; border-radius: .75rem; }
+    .pulse { width:18px;height:18px;border-radius:50%;background:orange;border:2px solid white;box-shadow:0 0 8px rgba(255,165,0,0.8);animation:pulse 1.6s infinite; }
+    @keyframes pulse { 0%{ transform:scale(.95)} 70%{ transform:scale(1.15)} 100%{ transform:scale(.95)}}
+    .poi-marker { width:14px;height:14px;background:#2a9d8f;border-radius:50%;border:2px solid white;box-shadow:0 0 6px rgba(0,0,0,0.12); }
+    .visited { opacity: .4; filter: grayscale(40%); }
+    .shortlist-item { cursor:pointer; }
+    .small { font-size: .9rem; color: #334155; }
+    .card-scroll { max-height: 420px; overflow:auto; }
+    .sticky-top { position: sticky; top: 12px; z-index: 40; }
+  </style>
+</head>
+<body class="antialiased">
+
+  <div class="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
+    <header class="mb-6">
+      <h1 class="text-3xl font-semibold">Campsites UK — Live Van‑Aware Dashboard</h1>
+      <p class="text-sm text-slate-600 mt-1">Merged dashboard, interactive map, POI shortlist, visited tracking and live van positions via WebSocket.</p>
+    </header>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- LEFT: Controls / Charts / Shortlist -->
+      <aside class="lg:col-span-1 space-y-6 sticky-top">
+        <div class="bg-white p-4 rounded-2xl shadow">
+          <div class="flex items-center gap-2">
+            <input id="search-input" placeholder="Search campsites (name)" class="flex-1 p-2 border rounded-lg" />
+            <button id="clear-filters" class="px-3 py-2 bg-slate-600 text-white rounded-lg">Clear</button>
+          </div>
+
+          <div class="mt-3 grid grid-cols-1 gap-2">
+            <select id="region-select" class="p-2 border rounded-lg w-full">
+              <option value="all">All regions</option>
+              <option value="England">England</option>
+              <option value="Scotland">Scotland</option>
+              <option value="Wales">Wales</option>
+            </select>
+
+            <div class="flex gap-2">
+              <button id="sortNearestBtn" class="flex-1 p-2 bg-emerald-500 text-white rounded-lg">Sort by nearest</button>
+              <button id="autoRotateToggle" class="flex-1 p-2 bg-slate-200 rounded-lg">Auto‑rotate: off</button>
+            </div>
+
+            <div class="mt-2 small">
+              <label class="font-medium">WebSocket (live vans / sync)</label>
+              <input id="wsUrl" placeholder="ws://192.168.1.42:8080" class="w-full p-2 border rounded-lg mt-1" />
+              <div class="flex gap-2 mt-2">
+                <button id="connectWS" class="flex-1 p-2 bg-blue-600 text-white rounded-lg">Connect WS</button>
+                <button id="disconnectWS" class="flex-1 p-2 bg-slate-300 rounded-lg" disabled>Disconnect</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-white p-4 rounded-2xl shadow">
+          <h3 class="font-semibold">Shortlist</h3>
+          <p class="small text-slate-500">Tap a campsite card to shortlist it. Use auto-rotate to preview stops on the map.</p>
+          <ul id="shortlist" class="mt-3 space-y-2"></ul>
+        </div>
+
+        <div class="bg-white p-4 rounded-2xl shadow">
+          <h3 class="font-semibold">Charts</h3>
+          <div class="mt-3">
+            <canvas id="regionChart" height="120"></canvas>
+          </div>
+          <div class="mt-3">
+            <canvas id="amenityChart" height="120"></canvas>
+          </div>
+        </div>
+      </aside>
+
+      <!-- MIDDLE: Map -->
+      <main class="lg:col-span-2 space-y-6">
+        <div class="bg-white p-4 rounded-2xl shadow">
+          <div id="map" class="rounded-md"></div>
+          <div class="mt-3 flex gap-2">
+            <button id="centerAll" class="p-2 bg-slate-600 text-white rounded-lg">Center All</button>
+            <button id="showOnlyShortlist" class="p-2 bg-emerald-500 text-white rounded-lg">Show Shortlist Only</button>
+            <button id="locateMe" class="p-2 bg-slate-200 rounded-lg">My Location</button>
+          </div>
+        </div>
+
+        <!-- Campsite grid -->
+        <section class="bg-white p-4 rounded-2xl shadow">
+          <div class="flex justify-between items-center mb-3">
+            <h2 class="text-xl font-semibold">Campsite Listings</h2>
+            <div id="resultsCount" class="small text-slate-600">0 results</div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 card-scroll" id="campsiteGrid">
+            <!-- Filled dynamically -->
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script>
+  /* ========== CONFIG ========== */
+  const MARKERS_FILE = 'markers.json'; // replace with your enriched dataset (must have latitude & longitude)
+  const AUTO_ROTATE_INTERVAL_MS = 5000;
+
+  /* ========== STATE ========== */
+  let markers = [];                 // array of POI objects from markers.json
+  let poiMarkers = {};              // id -> Leaflet marker
+  let visited = new Set(JSON.parse(localStorage.getItem('visitedMarkers') || '[]')); // persisted
+  let shortlist = JSON.parse(localStorage.getItem('shortlist') || '[]'); // array of ids
+  let autoRotate = false;
+  let autoRotateTimer = null;
+  let currentRotateIndex = 0;
+  let userLocation = null;          // {lat,lng}
+  let vans = {};                    // vanId -> marker
+  let ws = null;
+
+  /* ========== HELPERS ========== */
+  function haversine(a,b) {
+    if(!a || !b) return Infinity;
+    const toRad = v => v * Math.PI/180;
+    const R = 6371; // km
+    const dLat = toRad(b.lat - a.lat);
+    const dLon = toRad(b.lng - a.lng);
+    const la = Math.sin(dLat/2)**2 + Math.cos(toRad(a.lat))*Math.cos(toRad(b.lat))*Math.sin(dLon/2)**2;
+    return 2*R*Math.asin(Math.sqrt(la));
+  }
+  function saveVisited() { localStorage.setItem('visitedMarkers', JSON.stringify([...visited])); }
+  function saveShortlist() { localStorage.setItem('shortlist', JSON.stringify(shortlist)); }
+
+  /* ========== MAP INIT ========== */
+  const map = L.map('map', { center: [54.0, -2.0], zoom: 6 });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OSM' }).addTo(map);
+  const poiLayer = L.layerGroup().addTo(map);
+  const vanLayer = L.layerGroup().addTo(map);
+  let myLocMarker = null;
+
+  /* ========== UI: Charts ========== */
+  let regionChart = null, amenityChart = null;
+  function updateCharts(filtered) {
+    // Region counts (simple: extract last part after comma if present)
+    const regionCounts = {};
+    filtered.forEach(s => {
+      const parts = (s.location||'').split(',').map(p=>p.trim());
+      const region = parts[parts.length-1] || 'Unknown';
+      regionCounts[region] = (regionCounts[region]||0)+1;
+    });
+    const rLabels = Object.keys(regionCounts), rData = Object.values(regionCounts);
+    if (regionChart) regionChart.destroy();
+    regionChart = new Chart(document.getElementById('regionChart'), {
+      type: 'bar',
+      data: { labels: rLabels, datasets: [{ label:'#', data: rData, backgroundColor:'rgba(59,130,246,0.7)' }] },
+      options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}} }
+    });
+
+    const dogCount = filtered.filter(s => s.amenities && s.amenities.includes('Good Dog Walking Area')).length;
+    const notDog = filtered.length - dogCount;
+    if (amenityChart) amenityChart.destroy();
+    amenityChart = new Chart(document.getElementById('amenityChart'), {
+      type:'doughnut',
+      data:{ labels:['Dog Friendly','Not Specified'], datasets:[{ data:[dogCount,notDog], backgroundColor:['#16a34a','#e5e7eb'] }] },
+      options:{ responsive:true, maintainAspectRatio:false }
+    });
+  }
+
+  /* ========== LOAD MARKERS & RENDER CARDS ========== */
+  async function loadMarkers() {
+    try {
+      const res = await fetch(MARKERS_FILE);
+      markers = await res.json();
+      renderAll();
+    } catch (err) {
+      console.error('Failed to load markers.json', err);
+      alert('Could not load markers.json. Make sure file exists and contains latitude & longitude for each marker.');
+    }
+  }
+
+  function renderAll() {
+    renderPOIs();
+    renderCards();
+    updateCharts(markers);
+    updateShortlistUI();
+  }
+
+  function renderPOIs(showOnlyShortlist=false) {
+    poiLayer.clearLayers();
+    poiMarkers = {};
+    for (const m of markers) {
+      if (!m.latitude || !m.longitude) continue;
+      if (showOnlyShortlist && !shortlist.includes(m.id)) continue;
+      const el = document.createElement('div');
+      el.className = 'poi-marker' + (visited.has(m.id) ? ' visited' : '');
+      const icon = L.divIcon({ html: el.outerHTML, className: '' , iconSize: [22,22], iconAnchor:[11,11] });
+      const marker = L.marker([m.latitude, m.longitude], { icon }).addTo(poiLayer);
+      marker.bindPopup(popupFor(m));
+      marker.on('click', () => {
+        // open popup and highlight the card
+        highlightCard(m.id);
+      });
+      poiMarkers[m.id] = marker;
+    }
+  }
+
+  function popupFor(m) {
+    const vs = visited.has(m.id);
+    return `<div style="max-width:220px">
+      <strong>${escapeHtml(m.name)}</strong>
+      <div class="small mt-1">${escapeHtml(m.location || '')}</div>
+      <div class="small mt-2">${escapeHtml(m.overview ? m.overview.substring(0,200) : '')}</div>
+      <div class="mt-3 small">
+        <button data-id="${m.id}" class="visit-toggle p-1 rounded bg-${vs?'slate':'emerald'}-200" style="margin-right:6px">${vs? 'Visited':'Mark visited'}</button>
+        <button data-id="${m.id}" class="shortlist-toggle p-1 rounded bg-sky-200">Shortlist</button>
+      </div>
+    </div>`;
+  }
+
+  /* ========== CARDS ========== */
+  function renderCards() {
+    const grid = document.getElementById('campsiteGrid');
+    const search = document.getElementById('search-input').value.toLowerCase();
+    const region = document.getElementById('region-select').value;
+    const filtered = markers.filter(m => {
+      const nameOk = m.name.toLowerCase().includes(search);
+      const regionOk = region === 'all' || (m.location && m.location.includes(region));
+      return nameOk && regionOk;
+    });
+
+    grid.innerHTML = '';
+    document.getElementById('resultsCount').textContent = `${filtered.length} results`;
+    for (const m of filtered) {
+      const isVisited = visited.has(m.id);
+      const isShort = shortlist.includes(m.id);
+      const snippet = (m.overview || '').slice(0,200);
+      const card = document.createElement('div');
+      card.className = `bg-white p-4 rounded-2xl shadow ${isVisited ? 'visited' : ''}`;
+      card.id = 'card-' + m.id;
+      card.innerHTML = `
+        <div class="flex justify-between items-start">
+          <div>
+            <h3 class="text-lg font-semibold">${escapeHtml(m.name)}</h3>
+            <div class="small text-slate-500">${escapeHtml(m.location || '')}</div>
+          </div>
+          <div class="text-right">
+            <div class="small">${m.region || ''}</div>
+            <div class="mt-2 small">${m.latitude? (m.latitude.toFixed(4)+', '+m.longitude.toFixed(4)) : ''}</div>
+          </div>
+        </div>
+        <p class="text-slate-600 mt-3">${escapeHtml(snippet)}${(m.overview||'').length>200? '...' : ''}</p>
+        <div class="mt-4 flex gap-2 items-center">
+          <button data-id="${m.id}" class="shortlist-btn px-3 py-1 bg-sky-600 text-white rounded">${isShort? 'Shortlisted':'Shortlist'}</button>
+          <button data-id="${m.id}" class="visit-btn px-3 py-1 bg-emerald-500 text-white rounded">${isVisited? 'Visited':'Mark visited'}</button>
+          <button data-id="${m.id}" class="focus-btn px-3 py-1 bg-slate-200 rounded">Focus</button>
+        </div>
+        <div class="mt-3 small text-slate-600">
+          <strong>Key:</strong> ${ (m.amenities||[]).slice(0,5).map(a=>escapeHtml(a)).join(' • ') }
+        </div>
+      `;
+      grid.appendChild(card);
+
+      // event listeners
+      card.querySelector('.shortlist-btn').addEventListener('click', e => {
+        toggleShortlist(m.id);
+      });
+      card.querySelector('.visit-btn').addEventListener('click', e => {
+        toggleVisited(m.id, true, true);
+      });
+      card.querySelector('.focus-btn').addEventListener('click', e => {
+        focusOnMarker(m.id);
+      });
+      // clicking card highlights marker popup
+      card.addEventListener('click', (ev) => {
+        if (ev.target.classList.contains('shortlist-btn') || ev.target.classList.contains('visit-btn') || ev.target.classList.contains('focus-btn')) return;
+        focusOnMarker(m.id);
+      });
+    }
+  }
+
+  function highlightCard(id) {
+    const el = document.getElementById('card-'+id);
+    if (!el) return;
+    el.scrollIntoView({behavior:'smooth', block:'center'});
+    el.animate([{ transform:'scale(1.02)' }, { transform:'scale(1)' }], { duration: 350 });
+  }
+
+  function focusOnMarker(id) {
+    const m = poiMarkers[id];
+    if (!m) return;
+    map.panTo(m.getLatLng());
+    m.openPopup();
+  }
+
+  /* ========== VISITED & SHORTLIST ========== */
+  function toggleVisited(id, mark=true, broadcast=false) {
+    if (mark) visited.add(id); else visited.delete(id);
+    saveVisited();
+    // update POI icon and card
+    if (poiMarkers[id]) {
+      const el = poiMarkers[id].getElement();
+      if (el) el.classList.toggle('visited', visited.has(id));
+    }
+    const card = document.getElementById('card-'+id);
+    if (card) card.classList.toggle('visited', visited.has(id));
+    // broadcast to WS if requested
+    if (broadcast && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'visited', id, visited: visited.has(id) }));
+    }
+  }
+
+  function toggleShortlist(id) {
+    const idx = shortlist.indexOf(id);
+    if (idx === -1) shortlist.push(id); else shortlist.splice(idx,1);
+    saveShortlist();
+    updateShortlistUI();
+  }
+
+  function updateShortlistUI() {
+    const ul = document.getElementById('shortlist');
+    ul.innerHTML = '';
+    shortlist.forEach((id, i) => {
+      const m = markers.find(x => x.id === id);
+      if (!m) return;
+      const li = document.createElement('li');
+      li.className = 'flex justify-between items-center bg-slate-50 p-2 rounded small shortlist-item';
+      li.innerHTML = `<div><strong>${escapeHtml(m.name)}</strong><div class="small text-slate-500">${escapeHtml(m.location||'')}</div></div>
+                      <div class="flex gap-1">
+                        <button data-id="${id}" class="shortlist-focus p-1 bg-slate-200 rounded" title="Focus">🔎</button>
+                        <button data-id="${id}" class="shortlist-remove p-1 bg-red-200 rounded" title="Remove">✖</button>
+                      </div>`;
+      ul.appendChild(li);
+
+      li.querySelector('.shortlist-focus').addEventListener('click', () => { focusOnMarker(id); });
+      li.querySelector('.shortlist-remove').addEventListener('click', () => {
+        shortlist = shortlist.filter(x => x !== id); saveShortlist(); updateShortlistUI();
+      });
+    });
+  }
+
+  /* ========== SHORTLIST AUTO-ROTATE ========== */
+  function startAutoRotate() {
+    if (autoRotateTimer) clearInterval(autoRotateTimer);
+    if (!shortlist.length) return;
+    autoRotateTimer = setInterval(() => {
+      if (!shortlist.length) return;
+      currentRotateIndex = (currentRotateIndex + 1) % shortlist.length;
+      const id = shortlist[currentRotateIndex];
+      focusOnMarker(id);
+    }, AUTO_ROTATE_INTERVAL_MS);
+  }
+  function stopAutoRotate() {
+    if (autoRotateTimer) { clearInterval(autoRotateTimer); autoRotateTimer = null; }
+  }
+
+  /* ========== WORLD: WebSocket messages (vans / visited sync) ========== */
+  function connectWebSocket(url) {
+    if (ws) ws.close();
+    try {
+      ws = new WebSocket(url);
+    } catch (err) { alert('Invalid WebSocket URL'); return; }
+    ws.onopen = () => {
+      document.getElementById('connectWS').disabled = true;
+      document.getElementById('disconnectWS').disabled = false;
+      console.log('WS open');
+    };
+    ws.onclose = () => {
+      document.getElementById('connectWS').disabled = false;
+      document.getElementById('disconnectWS').disabled = true;
+      console.log('WS closed');
+    };
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (Array.isArray(msg)) {
+          msg.forEach(handleIncoming);
+        } else {
+          handleIncoming(msg);
+        }
+      } catch (err) {
+        console.warn('WS parse error', err, ev.data);
+      }
+    };
+  }
+
+  function handleIncoming(obj) {
+    if (!obj) return;
+    if (obj.type === 'visited' && obj.id) {
+      // remote visited sync
+      if (obj.visited) visited.add(obj.id); else visited.delete(obj.id);
+      saveVisited();
+      // update UI
+      if (poiMarkers[obj.id]) {
+        const el = poiMarkers[obj.id].getElement();
+        if (el) el.classList.toggle('visited', visited.has(obj.id));
+      }
+      const card = document.getElementById('card-'+obj.id);
+      if (card) card.classList.toggle('visited', visited.has(obj.id));
+      return;
+    }
+    // assume van location object: { vanId, lat, lng, speed, heading, recordedAt }
+    if (obj.vanId && obj.lat && obj.lng) {
+      upsertVan(obj);
+    }
+  }
+
+  /* ========== VAN MARKERS ========== */
+  function upsertVan(v) {
+    if (!v.vanId || v.lat == null || v.lng == null) return;
+    const key = v.vanId;
+    if (vans[key]) {
+      vans[key].setLatLng([v.lat, v.lng]);
+      return;
+    }
+    const el = document.createElement('div'); el.innerHTML = '<div class="pulse"></div>';
+    const marker = L.marker([v.lat, v.lng], { icon: L.divIcon({ html: el.innerHTML, className:'', iconSize:[24,24], iconAnchor:[12,12] }) }).addTo(vanLayer);
+    marker.bindPopup(`<strong>${escapeHtml(v.vanId)}</strong><div class="small">${v.speed?('Speed: '+Number(v.speed).toFixed(0)+' kph') : ''}</div>`);
+    vans[key] = marker;
+  }
+
+  /* ========== UTILS & EVENTS ========== */
+  function escapeHtml(s){ if(!s) return ''; return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
+  // buttons wiring
+  document.getElementById('clear-filters').addEventListener('click', () => {
+    document.getElementById('search-input').value = '';
+    document.getElementById('region-select').value = 'all';
+    renderCards();
+  });
+  document.getElementById('centerAll').addEventListener('click', () => {
+    const group = L.featureGroup([...Object.values(poiMarkers), ...Object.values(vans)].filter(Boolean));
+    if (!group.getLayers().length) return alert('No items to center on.');
+    map.fitBounds(group.getBounds().pad(0.2));
+  });
+  document.getElementById('showOnlyShortlist').addEventListener('click', () => {
+    renderPOIs(true);
+  });
+  document.getElementById('locateMe').addEventListener('click', () => {
+    if (!navigator.geolocation) return alert('Geolocation not supported.');
+    navigator.geolocation.getCurrentPosition(pos => {
+      const lat = pos.coords.latitude, lng = pos.coords.longitude;
+      userLocation = {lat,lng};
+      if (myLocMarker) myLocMarker.setLatLng([lat,lng]); else myLocMarker = L.marker([lat,lng]).addTo(map);
+      map.panTo([lat,lng]);
+    }, err => alert('Could not get position: ' + err.message), { enableHighAccuracy:true });
+  });
+
+  // shortlist auto rotate toggle
+  document.getElementById('autoRotateToggle').addEventListener('click', () => {
+    autoRotate = !autoRotate;
+    document.getElementById('autoRotateToggle').textContent = `Auto‑rotate: ${autoRotate ? 'on' : 'off'}`;
+    if (autoRotate) startAutoRotate(); else stopAutoRotate();
+  });
+
+  // sort by nearest (uses user location)
+  document.getElementById('sortNearestBtn').addEventListener('click', async () => {
+    if (!navigator.geolocation) return alert('Geolocation not supported');
+    navigator.geolocation.getCurrentPosition(pos => {
+      userLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      // sort markers by distance and show top 10 as cards
+      markers.sort((a,b) => haversine(userLocation, {lat:a.latitude,lng:a.longitude}) - haversine(userLocation, {lat:b.latitude,lng:b.longitude}));
+      renderCards();
+      updateCharts(markers);
+    }, err => alert('Geolocation error: ' + err.message));
+  });
+
+  // WebSocket connect/disconnect
+  document.getElementById('connectWS').addEventListener('click', () => {
+    const url = document.getElementById('wsUrl').value.trim();
+    if (!url) return alert('Enter a WebSocket URL first');
+    connectWebSocket(url);
+  });
+  document.getElementById('disconnectWS').addEventListener('click', () => {
+    if (ws) ws.close();
+  });
+
+  // delegate click events from popups (visit / shortlist)
+  map.on('popupopen', (ev) => {
+    const container = ev.popup.getElement();
+    if (!container) return;
+    const visitBtn = container.querySelector('.visit-toggle');
+    const shortBtn = container.querySelector('.shortlist-toggle');
+    if (visitBtn) visitBtn.addEventListener('click', (e) => {
+      const id = e.currentTarget.dataset.id;
+      toggleVisited(id, true, true);
+      ev.popup.update && ev.popup.update();
+      renderCards();
+    });
+    if (shortBtn) shortBtn.addEventListener('click', (e) => {
+      const id = e.currentTarget.dataset.id;
+      toggleShortlist(id);
+      updateShortlistUI();
+    });
+  });
+
+  // listen to dynamic actions inside the campsite grid (to update visited state after render)
+  document.addEventListener('click', (e) => {
+    // generic check for newly created buttons (delegation)
+    if (e.target.matches('.visit-btn')) {
+      const id = e.target.dataset.id;
+      toggleVisited(id, true, true);
+      renderCards();
+    }
+    if (e.target.matches('.shortlist-btn')) {
+      const id = e.target.dataset.id;
+      toggleShortlist(id); updateShortlistUI(); renderCards();
+    }
+  });
+
+  /* ========== INIT ========== */
+  loadMarkers();
+
+  // re-render on search/region change
+  document.getElementById('search-input').addEventListener('input', () => { renderCards(); updateCharts(markers); });
+  document.getElementById('region-select').addEventListener('change', () => { renderCards(); updateCharts(markers); });
+
+  // When storage changes elsewhere (other tabs), update
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'visitedMarkers') { visited = new Set(JSON.parse(e.newValue || '[]')); renderPOIs(); renderCards(); }
+    if (e.key === 'shortlist') { shortlist = JSON.parse(e.newValue || '[]'); updateShortlistUI(); }
+  });
+
+  </script>
+</body>
+</html>
