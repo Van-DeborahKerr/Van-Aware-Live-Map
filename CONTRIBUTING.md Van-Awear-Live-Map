@@ -1,0 +1,16 @@
+# Contributing to Van-Aware Live Map
+
+Thanks for wanting to improve the map! Here is how you can help:
+
+### 📍 Adding Markers
+If you have new campsite data, please update `markers.json` following the existing schema. Ensure coordinates are accurate!
+
+### 💻 Development
+1. Fork the repo.
+2. Create a feature branch: `git checkout -b feature/AmazingFeature`.
+3. Commit your changes: `git commit -m 'Add some AmazingFeature'`.
+4. Push to the branch: `git push origin feature/AmazingFeature`.
+5. Open a Pull Request.
+
+### 🐛 Reporting Bugs
+Please use the GitHub Issues tab to report any bugs or suggest new features for the Pi deployment scripts.
